@@ -128,6 +128,12 @@ DuckDB kan læse Parquet og CSV direkte og kan bruges til SQL-analyser.
 En begrænsning er, at vores løsning er lokal og ikke i sig selv er
 en komplet cloud- eller enterprise-platform.
 
+Et relevant alternativ kunne være PostgreSQL, hvis løsningen skulle køre
+på en central server og bruges af flere brugere eller applikationer.
+
+Til dette projekt vælger jeg stadig DuckDB, fordi løsningen er lokal,
+analytisk og arbejder med batch-data.
+
 Raw-mappen kan sammenlignes med idéen om at bevare rå data i en data lake,
 men en lokal mappe er ikke i sig selv en komplet data lake.
 
@@ -152,6 +158,25 @@ en backup af raw-data.
 En checksum kan bruges til at kontrollere, om en fil er den samme,
 men en checksum indeholder ikke selve dataene og kan derfor ikke erstatte
 en backup.
+
+### Datalivscyklus
+
+Persistent state er data, som bliver gemt, så de stadig findes efter et program
+eller en pipeline er stoppet. I projektet er raw-filerne og DuckDB-databasefilen
+eksempler på persistent state.
+
+Retention handler om, hvor længe data og forskellige versioner skal bevares.
+Raw-data bør bevares, hvis et tidligere resultat senere skal kunne genskabes.
+
+Et snapshot er en kopi af data eller systemets tilstand på et bestemt tidspunkt.
+Det kan bruges til at gå tilbage til en tidligere tilstand, men et snapshot er
+ikke det samme som de originale raw-data.
+
+En backup er en separat kopi, som kan bruges, hvis de normale data går tabt.
+Git bruges til versionering af kode, men er ikke en backup af Taxi-dataene.
+
+Rebuild betyder, at de afledte tabeller bliver bygget igen fra raw-data og kode.
+Det er derfor ikke det samme som at gendanne en database fra en backup.
 
 ## Dag04 – processing og pipeline
 
