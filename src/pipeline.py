@@ -1,89 +1,133 @@
-"""Torsdagsopgave: implementér en reproducerbar batch-pipeline.
+"""Dag04-opgave: implementér en reproducerbar batch-pipeline.
 
-Mandag til onsdag køres SQL-filerne enkeltvis med run_sql_file.py.
-Denne fil skal først kunne køre, når du implementerer torsdagens opgave.
+Arbejd efter Dag04 i 20556_Laerling_Ugecase_NYC_Taxi.md.
+Denne fil angiver kontrakten og funktionsgrænserne, men ikke løsningen.
 """
-
 from pathlib import Path
+
 import duckdb
+
 
 DB_PATH = Path("data/warehouse/taxi_20556.duckdb")
 
-SQL_FILES = [
-    Path("sql/02_dimensions.sql"),
-    Path("sql/03_fact_trip.sql"),
-    Path("sql/04_aggregates.sql"),
-]
-
-# Kilder:
-# Python pathlib:
-# https://docs.python.org/3/library/pathlib.html
-#
-# DuckDB Python API:
-# https://duckdb.org/docs/stable/clients/python/overview
+# 01_explore.sql er udforskning og er bevidst ikke et rebuild-trin.
+STEPS = (
+    ("dimensions", Path("sql/02_dimensions.sql")),
+    ("fact", Path("sql/03_fact_trip.sql")),
+    ("aggregate", Path("sql/04_aggregates.sql")),
+)
 
 
-def read_sql_file(path: Path) -> str:
-    """Læs en SQL-fil og kontroller, at den indeholder SQL."""
+def load_statements(
+    connection: duckdb.DuckDBPyConnection, sql_path: Path
+) -> list[str]:
+    """Læs og parse en påkrævet SQL-fil eller stop med en tydelig fejl."""
+    if not sql_path.exists():
+        raise FileNotFoundError(f"SQL-fil mangler: {sql_path}")
 
-    if not path.exists():
-        raise FileNotFoundError(f"SQL-fil mangler: {path}")
+    sql = sql_path.read_text(encoding="utf-8")
 
-    sql = path.read_text(encoding="utf-8")
+    parsed_statements = connection.extract_statements(sql)
 
-    sql_without_comments = "\n".join(
-        line for line in sql.splitlines()
-        if not line.strip().startswith("--")
-    ).strip()
+    if not parsed_statements:
+        raise ValueError(
+            f"SQL-filen indeholder ingen kørbare statements: {sql_path}"
+        )
 
-    if not sql_without_comments:
-        raise ValueError(f"SQL-filen indeholder ingen SQL: {path}")
+    return [statement.query for statement in parsed_statements]
 
-    return sql
+
+def run_step(
+    connection: duckdb.DuckDBPyConnection,
+    step_name: str,
+    statements: list[str],
+) -> None:
+    """Kør ét trin og gør det synligt, hvor en eventuel fejl opstår."""
+    print(f"\nTrin: {step_name}")
+
+    total = len(statements)
+
+    for index, statement in enumerate(statements, start=1):
+        print(f"  Statement {index}/{total}")
+
+        result = connection.execute(statement)
+
+        # SELECT-statements bruges som kontroller i vores SQL-filer.
+        if statement.lstrip().upper().startswith("SELECT"):
+            rows = result.fetchall()
+
+            if rows:
+                for row in rows:
+                    print(f"    {row}")
+            else:
+                print("    Ingen rækker")
+
+    print(f"Færdig: {step_name}")
 
 
 def main() -> None:
-    """Byg den analytiske løsning i den rækkefølge, afhængighederne kræver."""
-            # TODO: Implementér torsdagens pipeline.
-            #
-            # Krav:
-            # - Kør dimensions-, fact- og aggregate-trinnene i en begrundet rækkefølge.
-            # - Stop tydeligt, hvis en påkrævet SQL-fil mangler eller ikke indeholder SQL.
-            # - Brug den lokale DuckDB-database på DB_PATH.
-            # - Luk databaseforbindelsen, også hvis et trin fejler.
-            # - Vis hvilket trin der kører, så en fejl kan placeres.
-            # - En ny kørsel må ikke fordoble de afledte data.
-            #
-            # Dokumentér kort de Python- og DuckDB-kilder, du bruger.
+    """Kør hele builden sikkert i den rækkefølge, afhængighederne kræver."""
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = duckdb.connect(str(DB_PATH))
+    connection = duckdb.connect(str(DB_PATH))
 
     try:
         print(f"Database åbnet: {DB_PATH}")
 
-        for sql_file in SQL_FILES:
-            print(f"Trin: {sql_file}")
+        # Først valideres alle SQL-filer.
+        parsed_steps = []
 
-            sql = read_sql_file(sql_file)
-            conn.execute(sql)
+        print("\nValiderer SQL-filer...")
 
-            print(f"Færdig: {sql_file}")
+        for step_name, sql_path in STEPS:
+            statements = load_statements(connection, sql_path)
+            parsed_steps.append((step_name, statements))
+            print(
+                f"  OK: {sql_path} "
+                f"({len(statements)} statements)"
+            )
 
-        fact_count = conn.execute(
+        print("Alle SQL-filer er valideret.")
+
+        # Hele builden køres som én transaktion.
+        connection.execute("BEGIN TRANSACTION")
+
+        try:
+            print("\nBuild startet.")
+
+            for step_name, statements in parsed_steps:
+                run_step(connection, step_name, statements)
+
+            connection.execute("COMMIT")
+            print("\nCOMMIT: Hele builden er gemt.")
+
+        except Exception:
+            connection.execute("ROLLBACK")
+            print("\nROLLBACK: Builden fejlede. Ændringer er ikke gemt.")
+            raise
+
+        fact_count = connection.execute(
             "SELECT COUNT(*) FROM fact_trip"
         ).fetchone()[0]
 
-        aggregate_count = conn.execute(
+        aggregate_count = connection.execute(
             "SELECT COUNT(*) FROM agg_daily_pickup_zone"
         ).fetchone()[0]
 
-        print(f"fact_trip: {fact_count} rækker")
-        print(f"agg_daily_pickup_zone: {aggregate_count} rækker")
+        print("\nSlutkontrol:")
+        print(f"  fact_trip: {fact_count} rækker")
+        print(
+            "  agg_daily_pickup_zone: "
+            f"{aggregate_count} rækker"
+        )
+
+        print("\nPipeline færdig uden fejl.")
 
     finally:
-        conn.close()
+        connection.close()
         print("Databaseforbindelsen er lukket.")
 
 
 if __name__ == "__main__":
     main()
+

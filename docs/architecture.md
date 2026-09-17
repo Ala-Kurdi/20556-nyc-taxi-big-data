@@ -152,3 +152,139 @@ en backup af raw-data.
 En checksum kan bruges til at kontrollere, om en fil er den samme,
 men en checksum indeholder ikke selve dataene og kan derfor ikke erstatte
 en backup.
+
+## Dag04 – processing og pipeline
+
+### Batch-pipeline
+
+Jeg har lavet en batch-pipeline i Python, som bygger de afledte tabeller i
+den rækkefølge, de er afhængige af:
+
+02_dimensions.sql
+→ 03_fact_trip.sql
+→ 04_aggregates.sql
+
+01_explore.sql er ikke med i pipelinen, fordi den bruges til at undersøge
+data og ikke til at bygge modellen.
+
+Pipelinen bruger DuckDBs parser til at læse SQL-filerne. Før builden starter,
+kontrollerer den, at alle SQL-filer findes og indeholder SQL-statements.
+
+### Fejl, transaction og rollback
+
+Hele builden køres i én transaction.
+
+Hvis alle trin lykkes, laver pipelinen COMMIT, og ændringerne bliver gemt.
+
+Hvis et statement fejler, stopper pipelinen. De næste statements og trin
+bliver ikke kørt, og der bliver lavet ROLLBACK. På den måde bliver databasen
+ikke efterladt med en halv build.
+
+Pipelinen viser både trin og statement-nummer, så det er muligt at se,
+hvor en fejl opstår.
+
+Jeg testede dette med en ufarlig fejl. Statement 1 lavede en testtabel,
+statement 2 fejlede med vilje, og statement 3 blev ikke kørt.
+Efter ROLLBACK kontrollerede jeg databasen, og testtabellen fra statement 1
+var også væk.
+
+### Genkørsel
+
+Jeg har kørt pipelinen to gange med det samme input.
+
+Begge kørsler gav:
+
+- fact_trip: 3.475.226 rækker
+- agg_daily_pickup_zone: 7.308 rækker
+
+Data blev derfor ikke fordoblet.
+
+Det virker, fordi de afledte tabeller bygges igen med CREATE OR REPLACE TABLE
+i stedet for at lægge de samme rækker oven i de gamle.
+
+Et nyt månedligt batch er noget andet end at genkøre det samme input.
+Den nuværende løsning er lavet og testet med januar-filen. Hvis flere måneder
+skal indlæses, skal pipelinen udvides til at håndtere flere inputfiler og
+kontrollere blandt andet dubletter og dataversioner.
+
+### ETL og ELT
+
+I denne løsning bliver raw-data først gemt som Parquet og CSV i data/raw.
+
+DuckDB læser derefter raw-data og laver dimensioner, fact-tabellen og
+aggregatet. De afledte tabeller gemmes i:
+
+data/warehouse/taxi_20556.duckdb
+
+Løsningen minder derfor mest om ELT, fordi raw-data først er tilgængelige,
+og transformationerne derefter bliver udført i DuckDB.
+
+### Tænkt streamingvariant
+
+Den nuværende løsning er batch. Den arbejder med en afgrænset fil og stopper,
+når behandlingen er færdig.
+
+Hvis løsningen i stedet skulle være streaming, kunne dataflowet se sådan ud:
+
+Taxi / producer
+→ queue eller log
+→ processor
+→ database
+→ dashboard eller anden applikation
+
+Produceren sender nye events.
+
+En queue eller log holder events, indtil de kan behandles.
+
+Processoren læser events og laver de nødvendige transformationer.
+
+Databasen gemmer resultatet, og en applikation eller et dashboard kan bruge
+dataene.
+
+En orchestrator har en anden opgave. Den styrer og koordinerer jobs, for
+eksempel hvornår et job skal starte, og hvad der skal ske efter et andet job.
+Den laver ikke selve datatransformationen.
+
+Streamingvarianten er kun et forslag. Den er ikke implementeret i dette
+projekt.
+
+### Parallel processing
+
+Hvis datamængden bliver så stor, at pipelinen ikke kan blive færdig inden
+for den ønskede tid, kunne arbejdet deles op.
+
+Et eksempel kunne være:
+
+Data
+→ partitionering efter dato
+→ flere workers
+→ resultater kombineres
+→ samlet resultat
+
+Hver worker kan behandle sin egen dato eller periode samtidig.
+
+Fordelen er, at store datamængder kan behandles hurtigere.
+Ulempen er mere kompleksitet og ekstra arbejde med at koordinere workers
+og samle resultaterne korrekt.
+
+Parallel processing er kun et konceptuelt forslag i dette projekt og er
+ikke implementeret.
+
+### Implementeret og testet
+
+Implementeret og testet:
+
+- Python batch-pipeline
+- rækkefølgen dimensions → fact → aggregate
+- SQL parsing med DuckDB
+- transaction med COMMIT og ROLLBACK
+- fejltest
+- genkørsel med samme input uden fordobling
+
+Kun beskrevet som forslag:
+
+- streaming
+- queue/log
+- orchestration
+- parallel processing
+- indlæsning af flere månedlige batches
