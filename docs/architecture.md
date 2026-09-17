@@ -1,0 +1,154 @@
+# Arkitektur
+
+Version 1.0 · Elevskabelon
+
+## Indhold
+
+1. [Data](#data)
+2. [Analysebehov](#analysebehov)
+3. [Arkitekturskitse](#arkitekturskitse)
+
+## Data
+
+Yellow Taxi: Én rå række ser ud til at repræsentere:
+
+> Én taxatur. Rækken viser blandt andet, hvornår turen starter og slutter, hvor den starter og slutter, turens distance, antal passagerer og prisen på turen.
+
+Taxi Zone Lookup: Én række repræsenterer:
+
+> Én taxi-zone. Hver zone har et LocationID, borough, zone-navn og service_zone.
+
+Relevante felter:
+
+- tpep_pickup_datetime: Dato og tidspunkt for hvornår turen starter.
+- tpep_dropoff_datetime: Dato og tidspunkt for hvornår turen slutter.
+- PULocationID: ID på den zone hvor turen starter.
+- DOLocationID: ID på den zone hvor turen slutter.
+- trip_distance: Hvor langt taxaturen er kørt. Det måles i miles.
+
+Kilde:
+NYC Taxi & Limousine Commission, Yellow Taxi Trip Records Data Dictionary:
+https://www.nyc.gov/assets/tlc/downloads/pdf/data_dictionary_trip_records_yellow.pdf
+
+Jeg fandt også noget i dataene, som jeg ikke forventede. Pickup-tiderne går fra 31-12-2024 20:47:55 til 01-02-2025 00:00:44, selv om filen hedder yellow_tripdata_2025-01.parquet.
+
+Jeg ændrer ikke de rå data på grund af det. Jeg beholder dem som de er og noterer bare det, jeg har fundet.
+
+## Analysebehov
+
+1. Hvilke pickup-zoner har flest taxature?
+
+2. Hvilke pickup-zoner har den højeste gennemsnitlige pris pr. tur?
+
+3. Hvordan ændrer antallet af taxature sig fra dag til dag?
+
+Alle tre spørgsmål kan undersøges med de data, vi har. De to første bruger Taxi Zone Lookup, så LocationID kan kobles sammen med et rigtigt zone-navn.
+
+## Arkitekturskitse
+
+Yellow Taxi ──→ Parquet ──┐
+                          ├──→ data/raw
+Zone Lookup ──→ CSV ──────┘
+                              ↓
+                           DuckDB
+                              ↓
+                      SQL undersøgelse
+                              ↓
+                      Join LocationID
+                              ↓
+                         Datamodel
+                         ↙       ↘
+                    Fact Trip   Dimensioner
+                         ↘       ↙
+                         Aggregater
+                              ↓
+                    Analyser/resultater
+
+
+Dataflowet starter med de to filer Yellow Taxi og Taxi Zone Lookup. De bliver gemt i data/raw, og jeg beholder dem uændret.
+
+DuckDB læser filerne direkte fra raw-mappen. Her kan jeg undersøge data med SQL, for eksempel antal rækker, datoer, zoner og priser. Jeg kan også koble taxadata sammen med Zone Lookup.
+
+Det, der virker nu, er raw-data, DuckDB, SQL-undersøgelsen, datamodellen og aggregatet.
+
+Datamodellen består af dim_date, dim_zone og fact_trip. Derefter er der bygget et aggregate, som samler data pr. pickup-zone og dato.
+
+Raw-data er de originale filer. Datamodellen, joins, beregninger og aggregater er afledte data, fordi de bliver lavet ud fra raw-data.
+
+Kilder:
+NYC Taxi & Limousine Commission, Trip Record Data:
+https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page
+
+NYC Taxi & Limousine Commission, Yellow Taxi Data Dictionary:
+https://www.nyc.gov/assets/tlc/downloads/pdf/data_dictionary_trip_records_yellow.pdf
+
+DuckDB dokumentation:
+https://duckdb.org/docs/stable/
+
+## Dag03 – aggregate, lagring og genskabelse
+
+### Aggregate
+
+I fact_trip repræsenterer én række én taxatur.
+
+I agg_daily_pickup_zone repræsenterer én række én pickup-zone på én dato.
+
+Aggregatet bevarer dato, pickup-zone, antal ture og afstandsgrundlaget.
+Det gør det muligt at beregne gennemsnitlig trip_distance igen.
+
+Fact-tabellen har 3.475.226 rækker, mens aggregatet har 7.308 rækker.
+Kontrollen viser, at summen af antal_ture i aggregatet stadig er 3.475.226.
+
+Aggregatet kan f.eks. bruges til at undersøge den gennemsnitlige afstand
+pr. pickup-zone og dato.
+
+Hvis jeg vil undersøge en bestemt taxatur, skal jeg bruge fact_trip,
+fordi detaljerne om den enkelte tur går tabt i aggregatet.
+
+### NULL og nul
+
+Der er 0 NULL-værdier i trip_distance, men 90.893 ture har værdien 0.
+
+NULL betyder, at værdien mangler eller er ukendt.
+0 betyder, at der faktisk er registreret værdien 0.
+Derfor er NULL og 0 ikke det samme.
+
+### Lagring og platform
+
+Raw-data ligger i data/raw som Parquet og CSV.
+
+De afledte tabeller dim_date, dim_zone, fact_trip og
+agg_daily_pickup_zone gemmes i DuckDB-databasen:
+
+data/warehouse/taxi_20556.duckdb
+
+Jeg bruger DuckDB, fordi det passer godt til en lokal analytisk løsning.
+DuckDB kan læse Parquet og CSV direkte og kan bruges til SQL-analyser.
+
+En begrænsning er, at vores løsning er lokal og ikke i sig selv er
+en komplet cloud- eller enterprise-platform.
+
+Raw-mappen kan sammenlignes med idéen om at bevare rå data i en data lake,
+men en lokal mappe er ikke i sig selv en komplet data lake.
+
+### Genskabelse
+
+For at kunne genskabe løsningen skal raw-data og koden bevares.
+
+Vigtige dele er:
+
+- data/raw/yellow_tripdata_2025-01.parquet
+- data/raw/taxi_zone_lookup.csv
+- SQL-filerne
+- src/pipeline.py
+- requirements.txt
+
+Hvis DuckDB-databasen bliver slettet, kan de afledte tabeller bygges igen
+fra raw-data ved hjælp af SQL-filerne og pipelinen.
+
+Git bruges til versionering af kode, men Git-historikken er ikke i sig selv
+en backup af raw-data.
+
+En checksum kan bruges til at kontrollere, om en fil er den samme,
+men en checksum indeholder ikke selve dataene og kan derfor ikke erstatte
+en backup.
