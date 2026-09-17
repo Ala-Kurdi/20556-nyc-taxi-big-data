@@ -8,6 +8,7 @@ __pycache__/
 /data/warehouse/*.duckdb
 /output/*
 !/output/.gitkeep
+!/output/taxature_pr_dag_januar_2025.png
 !/data/raw/.gitkeep
 !/data/warehouse/.gitkeep
 
